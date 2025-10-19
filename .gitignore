@@ -1,0 +1,42 @@
+# Archivos Python temporales
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Modelos pre-entrenados (archivos grandes)
+models/
+*.onnx
+*.pth
+*.pkl
+
+# Archivos de calibración y datos procesados
+*.pkl
+tp2_reconstruccion_3d/datasets/*/calib/*.pkl
+tp2_reconstruccion_3d/datasets/*/calib/stereo_maps.pkl
+tp2_reconstruccion_3d/datasets/*/calib/stereo_calibration.pkl
+
+# Datos de disparidad y rectificación (archivos grandes)
+*/disparidad_cre/
+*/rectificadas/
+*/disparidad/crudo/
+*/disparidad/visual/
+*.npy
+
+# Reconstrucciones 3D
+*.ply
+tp2_reconstruccion_3d/datasets/stereo_budha_charuco/reconstruccion_3d_final_colores.ply
+tp2_reconstruccion_3d/datasets/stereo_budha_charuco/reconstruccion_filtrada_colores.ply
+
+# Archivos de configuración de VS Code/IDEs
+.vscode/
+.idea/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.tmp
+*.temp
