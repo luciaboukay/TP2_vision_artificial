@@ -1,0 +1,9 @@
+checkerboard:
+  cols: 10
+  rows: 7
+  square_size: 24.2  # square side size in millimeters
+
+# Pattern information for 3D reconstruction
+pattern_type: "checkerboard"
+# Note: cols and rows refer to the number of internal corners
+# For a 10x7 checkerboard, there are 11x8 actual squares
