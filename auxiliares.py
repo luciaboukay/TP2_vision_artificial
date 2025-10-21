@@ -60,9 +60,9 @@ def rectificar_imagenes(path_imgs, path_maps):
     print(f"   ROI común aplicado: (x={roiX}, y={roiY}, w={roiW}, h={roiH})")
 
     for left_path, right_path in zip(left_imgs, right_imgs):
-        # Leer imágenes
-        imgL = cv2.imread(left_path,  cv2.IMREAD_GRAYSCALE)
-        imgR = cv2.imread(right_path, cv2.IMREAD_GRAYSCALE)
+        # Leer imágenes en color
+        imgL = cv2.imread(left_path)
+        imgR = cv2.imread(right_path)
 
         # Rectificar
         rectL = cv2.remap(imgL, left_map_x,  left_map_y,  cv2.INTER_LINEAR)
