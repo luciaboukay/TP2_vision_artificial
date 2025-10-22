@@ -1,22 +1,3 @@
-# Archivos Python temporales
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-
-# Modelos pre-entrenados (archivos grandes)
-models/
-*.onnx
-*.pth
-*.pkl
-
-# Archivos de calibración y datos procesados
-*.pkl
-tp2_reconstruccion_3d/datasets/*/calib/*.pkl
-tp2_reconstruccion_3d/datasets/*/calib/stereo_maps.pkl
-tp2_reconstruccion_3d/datasets/*/calib/stereo_calibration.pkl
-
 # Datos de disparidad y rectificación (archivos grandes)
 */disparidad_cre/
 */rectificadas/
