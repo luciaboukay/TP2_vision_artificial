@@ -26,12 +26,13 @@ def generar_puntos_objeto(checkerboard, square_size):
     return objp
 
 
-def calibrar_stereo_checkerboard(base_dir, checkerboard, square_size):
+def calibrar_stereo_checkerboard(base_dir, img_paths, checkerboard, square_size):
     """
     Calibra un sistema estéreo a partir de imágenes de un checkerboard y guarda los parámetros obtenidos.
 
     Args:
-        base_dir (str): Directorio base con las imágenes "calib_left*.jpg" y "calib_right*.jpg" y salida del pickle.
+        base_dir (str): Directorio base con las imágenes y la salida del pickle.
+        img_paths (list[str]): Lista de rutas de imágenes para calibrar.
         checkerboard (tuple[int, int]): Cantidad de esquinas internas (cols, rows) del patrón.
         square_size (float): Tamaño real del cuadrado del checkerboard.
 
@@ -39,8 +40,8 @@ def calibrar_stereo_checkerboard(base_dir, checkerboard, square_size):
         dict: Diccionario con intrínsecas y coeficientes de distorsión de ambas cámaras, matrices R, T, E, F y el image_size.
     """
     # buscar y ordenar rutas de imágenes left/right
-    left_images  = sorted(glob.glob(os.path.join(base_dir, "calib_left*.jpg")))
-    right_images = sorted(glob.glob(os.path.join(base_dir, "calib_right*.jpg")))
+    left_images  = sorted(glob.glob(os.path.join(base_dir, img_paths[0])))
+    right_images = sorted(glob.glob(os.path.join(base_dir, img_paths[1])))
     # validar cantidad de pares disponibles
     assert len(left_images) == len(right_images) and len(left_images) > 0, \
         "Debe haber el mismo número de imágenes left/right y al menos una pareja."
