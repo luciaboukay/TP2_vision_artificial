@@ -779,7 +779,6 @@ def detect_charuco_markers(image, board, detector_params=None):
 
     return result
 
-
 # ----------------------- Estimación de pose mediante homografía -----------------------
 
 def estimate_camera_pose_with_homography(image, board, detection, calibration, undistort=False):
@@ -917,11 +916,11 @@ def detect_charuco_pose(image, camera_matrix, dist_coeffs, board, verbose=False)
     detection = detect_charuco_markers(image, board)
     if detection is None:
         if verbose:
-            print("  ❌ No se detectaron marcadores ArUco.")
+            print("No se detectaron marcadores ArUco.")
         return False, None, None, None, None
 
     if verbose:
-        print(f"  📍 Marcadores ArUco detectados: {len(detection['ids'])}")
+        print(f"Marcadores ArUco detectados: {len(detection['ids'])}")
 
     # estimar la pose usando homografía + PnP
     result = estimate_camera_pose_with_homography(
@@ -934,16 +933,273 @@ def detect_charuco_pose(image, camera_matrix, dist_coeffs, board, verbose=False)
 
     if result is None:
         if verbose:
-            print("  ❌ No se pudo estimar la pose.")
+            print("No se pudo estimar la pose.")
         return False, None, None, None, None
 
     success, rvec, tvec = result
 
     if verbose:
-        print("  ✅ Pose estimada correctamente.")
+        print("Pose estimada correctamente.")
         print(f"     Traslación (t): {tvec.flatten()}")
 
     return success, rvec, tvec, detection["corners"], detection["ids"]
+
+# ----------------------- Dibujo y visualización de tableros ChArUco -----------------------
+
+def draw_charuco_markers(image, detection, draw_rejected=False):
+    """
+    Dibuja sobre una imagen los resultados de la detección de un tablero ChArUco.
+
+    Args:
+        image (np.ndarray): Imagen de entrada (BGR o RGB).
+        detection (dict | None): Resultado devuelto por `detect_charuco_markers`, con claves:
+            - 'corners': lista de esquinas detectadas.
+            - 'ids': IDs de los marcadores válidos.
+            - 'rejected': marcadores descartados (opcional).
+        draw_rejected (bool): Si True, también dibuja los marcadores rechazados en rojo.
+
+    Devuelve:
+        np.ndarray: Imagen de salida con los marcadores dibujados.
+    """
+    output_image = image.copy()
+    if detection is None:
+        return output_image
+
+    corners = detection["corners"]
+    ids = detection["ids"]
+    rejected = detection["rejected"]
+
+    # Dibujar marcadores aceptados (bordes verdes)
+    if ids is not None and len(ids) > 0:
+        output_image = cv2.aruco.drawDetectedMarkers(output_image, corners, ids)
+
+    # Dibujar marcadores rechazados (bordes rojos)
+    if draw_rejected and rejected is not None and len(rejected) > 0:
+        cv2.aruco.drawDetectedMarkers(output_image, rejected, borderColor=(0, 0, 255))
+
+    return output_image
+
+
+def visualizar_deteccion_charuco(image_path, camera_matrix, dist_coeffs, board, square_length):
+    """
+    Visualiza la detección de un tablero ChArUco en una imagen y estima su pose.
+
+    Args:
+        image_path (str): Ruta a la imagen donde se evaluará la detección.
+        camera_matrix (np.ndarray): Matriz intrínseca de la cámara.
+        dist_coeffs (np.ndarray): Coeficientes de distorsión.
+        board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado.
+        square_length (float): Longitud del cuadrado del tablero (en mm).
+
+    Devuelve:
+        None: Muestra la imagen con la detección visualizada y mensajes de estado.
+    """
+    # Leer imagen
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"No se pudo cargar la imagen: {image_path}")
+        return
+
+    # Detectar marcadores
+    detection = detect_charuco_markers(img, board)
+
+    # Dibujar resultados sobre la imagen
+    img_markers = draw_charuco_markers(img, detection, draw_rejected=True)
+
+    if detection is None:
+        print(f"No se detectaron marcadores ArUco en {os.path.basename(image_path)}")
+    else:
+        print(f"Detectados {len(detection['ids'])} marcadores ArUco")
+
+        # Estimar pose a partir de la detección
+        result = estimate_camera_pose_with_homography(
+            img, board, detection, (camera_matrix, dist_coeffs), undistort=False
+        )
+
+        if result is not None:
+            success, rvec, tvec = result
+            if success:
+                # Dibujar ejes 3D del tablero
+                axis_length = square_length / 1000.0 * 2  # 2 cuadrados de longitud
+                cv2.drawFrameAxes(
+                    img_markers, camera_matrix, dist_coeffs,
+                    rvec, tvec, axis_length, thickness=3
+                )
+                print(f"Pose estimada correctamente")
+                print(f"   Traslación (x, y, z): "
+                      f"({tvec[0][0]:.3f}, {tvec[1][0]:.3f}, {tvec[2][0]:.3f}) m")
+            else:
+                print("No se pudo estimar la pose")
+        else:
+            print("Insuficientes marcadores para estimar pose")
+
+    # Mostrar resultado con Matplotlib
+    plt.figure(figsize=(15, 10))
+    plt.imshow(cv2.cvtColor(img_markers, cv2.COLOR_BGR2RGB))
+    title = f"Detección ChArUco - {os.path.basename(image_path)}"
+    if detection is not None and result is not None:
+        title += " Detección exitosa"
+    else:
+        title += " Fallo en la detección"
+    plt.title(title, fontsize=14, weight="bold")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+
+def visualizar_todas_detecciones_charuco(base_dir, calib_path, charuco_board, square_length, max_images=5):
+    """
+    Visualiza la detección de tableros ChArUco en múltiples imágenes de un directorio.
+
+    Args:
+        base_dir (str): Carpeta base con las imágenes (left_*.jpg).
+        calib_path (str): Ruta al archivo de calibración estéreo (.pkl).
+        charuco_board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado para la detección.
+        square_length (float): Longitud del cuadrado del tablero (en mm).
+        max_images (int): Número máximo de imágenes a visualizar. Por defecto, 5.
+
+    Devuelve:
+        None: Muestra las imágenes con detección y resultados por consola.
+    """
+    # Cargar calibración
+    with open(calib_path, "rb") as f:
+        calib = pickle.load(f)
+
+    left_K = calib["left_K"]
+    left_dist = calib["left_dist"]
+
+    # Listar imágenes izquierda
+    left_imgs = sorted(glob.glob(os.path.join(base_dir, "left_*.jpg")))
+    if len(left_imgs) == 0:
+        print(f"No se encontraron imágenes en: {base_dir}")
+        return
+
+    print(f"🔍 Visualizando detección de ChArUco en {min(max_images, len(left_imgs))} imágenes...\n")
+
+    for i, img_path in enumerate(left_imgs[:max_images]):
+        print("\n" + "=" * 60)
+        print(f"Imagen {i+1}: {os.path.basename(img_path)}")
+        print("=" * 60)
+        visualizar_deteccion_charuco(img_path, left_K, left_dist, charuco_board, square_length)
+
+
+# ----------------------- Análisis de calidad de detecciones ChArUco -----------------------
+
+def analizar_calidad_detecciones(
+    visualizar=True,
+    charuco_board=None,
+    square_length=52.6,
+    max_visualizaciones=21
+):
+    """
+    Analiza todas las imágenes del dataset y reporta la calidad de detección
+    del tablero ChArUco. Además, muestra una figura única con todas las poses
+    estimadas si 'visualizar' es True.
+
+    Args:
+        visualizar (bool): Si True, muestra todas las detecciones con ejes y marcadores.
+        charuco_board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado para la detección.
+        square_length (float): Longitud del cuadrado del tablero (en mm).
+        max_visualizaciones (int): Máximo de imágenes a visualizar.
+
+    Devuelve:
+        list[dict]: Lista con resultados de detección (imagen, éxito, marcadores, tvec).
+    """
+    print("\n" + "=" * 80)
+    print("ANÁLISIS DE CALIDAD DE DETECCIÓN DE CHARUCO")
+    print("=" * 80)
+
+    base_dir = "tp2_reconstruccion_3d/datasets/stereo_budha_charuco"
+    calib_path = os.path.join(base_dir, "calib/stereo_calibration.pkl")
+
+    # Cargar calibración estéreo
+    with open(calib_path, "rb") as f:
+        calib = pickle.load(f)
+
+    left_K = calib["left_K"]
+    left_dist = calib["left_dist"]
+
+    captures_dir = os.path.join(base_dir, "captures")
+    left_imgs = sorted(glob.glob(os.path.join(captures_dir, "left_*.jpg")))
+
+    resultados = []
+    imagenes_vis = []  # para almacenar visualizaciones
+
+    for i, img_path in enumerate(left_imgs):
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+
+        success, rvec, tvec, corners, ids = detect_charuco_pose(
+            img, left_K, left_dist, charuco_board, verbose=False
+        )
+
+        num_markers = len(ids) if ids is not None else 0
+        resultados.append({
+            "imagen": os.path.basename(img_path),
+            "exito": success,
+            "num_marcadores": num_markers,
+            "tvec": tvec.flatten() if tvec is not None else None
+        })
+
+        # Si hay que visualizar, dibujamos sobre la imagen
+        if visualizar and i < max_visualizaciones:
+            detection = {"corners": corners, "ids": ids, "rejected": None}
+            img_draw = draw_charuco_markers(img, detection, draw_rejected=True)
+
+            if success:
+                axis_length = square_length / 1000.0 * 2  # dos cuadrados de longitud
+                cv2.drawFrameAxes(img_draw, left_K, left_dist, rvec, tvec, axis_length, thickness=2)
+                label = f"{os.path.basename(img_path)} ({num_markers} mk)"
+            else:
+                label = f"{os.path.basename(img_path)} (Fallo)"
+
+            img_rgb = cv2.cvtColor(img_draw, cv2.COLOR_BGR2RGB)
+            imagenes_vis.append((img_rgb, label))
+
+    # ----------------------------------------------------------------------
+    # Tabla resumen
+    # ----------------------------------------------------------------------
+    print(f"\n{'Imagen':<15} {'Estado':<10} {'Marcadores':<12} {'Posición (x, y, z)'}")
+    print("-" * 80)
+    exitos = 0
+    for r in resultados:
+        estado = "OK" if r["exito"] else "FALLO"
+        if r["exito"]:
+            exitos += 1
+            pos = f"({r['tvec'][0]:.3f}, {r['tvec'][1]:.3f}, {r['tvec'][2]:.3f})"
+        else:
+            pos = "N/A"
+        print(f"{r['imagen']:<15} {estado:<10} {r['num_marcadores']:<12} {pos}")
+
+    print("-" * 80)
+    print(f"\nRESUMEN GLOBAL:")
+    print(f"   Total de imágenes: {len(resultados)}")
+    print(f"   Éxitos: {exitos} | Fallos: {len(resultados) - exitos}")
+    print(f"   Tasa de éxito: {100 * exitos / len(resultados):.1f}%")
+
+    # ----------------------------------------------------------------------
+    # Visualización combinada
+    # ----------------------------------------------------------------------
+    if visualizar and imagenes_vis:
+        n = len(imagenes_vis)
+        cols = 7
+        rows = int(np.ceil(n / cols))
+
+        plt.figure(figsize=(3.2 * cols, 3.5 * rows))
+        for i, (img_rgb, label) in enumerate(imagenes_vis, 1):
+            plt.subplot(rows, cols, i)
+            plt.imshow(img_rgb)
+            plt.title(label, fontsize=9)
+            plt.axis("off")
+
+        plt.suptitle("Detección y Pose de Tableros ChArUco", fontsize=14, weight="bold")
+        plt.tight_layout()
+        plt.show()
+
+    return resultados
+
+
 
 
 # ----------------------- Utilidades de transformación -----------------------
