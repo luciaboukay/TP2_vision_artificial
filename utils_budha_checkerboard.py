@@ -6,6 +6,10 @@ import pickle
 import matplotlib.pyplot as plt
 import re
 import open3d as o3d
+from pathlib import Path
+from stereodemo.method_cre_stereo import CREStereo
+from stereodemo.method_opencv_bm import StereoBM, StereoSGBM
+from stereodemo.methods import InputPair, Config
 
 
 def generar_puntos_objeto(checkerboard, square_size):
@@ -327,6 +331,63 @@ def visualizar_rectificacion(
     plt.title(title, fontsize=13, weight="bold")  # asignar título
     plt.show()
 
+def visualizar_imagenes_rectificadas(path_rectificadas, step=40, n_mostrar=2):
+    """
+    Muestra pares de imágenes rectificadas lado a lado con líneas epipolares horizontales
+    para verificar visualmente la alineación estéreo.
+
+    Args:
+        path_rectificadas (str): Ruta a la carpeta que contiene las imágenes rectificadas.
+            Debe incluir archivos con nombres del tipo 'rect_left_*.jpg' y 'rect_right_*.jpg'.
+        step (int): Espaciado vertical en píxeles entre líneas epipolares. Por defecto, 40.
+        n_mostrar (int): Cantidad de pares de imágenes a visualizar. Por defecto, 2.
+
+    Devuelve:
+        None: Muestra las figuras en pantalla sin retornar un valor.
+    """
+    # Buscar y ordenar pares de imágenes rectificadas
+    left_imgs  = sorted(glob.glob(os.path.join(path_rectificadas, "rect_left_*.jpg")))
+    right_imgs = sorted(glob.glob(os.path.join(path_rectificadas, "rect_right_*.jpg")))
+
+    # Validar existencia y correspondencia de pares
+    if len(left_imgs) == 0 or len(left_imgs) != len(right_imgs):
+        print("No se encontraron pares válidos en:", path_rectificadas)
+        print(f"   Left: {len(left_imgs)} | Right: {len(right_imgs)}")
+        return
+
+    n_pairs = min(n_mostrar, len(left_imgs))
+
+    # Iterar sobre los primeros n pares
+    for i in range(n_pairs):
+        imgL = cv2.imread(left_imgs[i], cv2.IMREAD_COLOR)
+        imgR = cv2.imread(right_imgs[i], cv2.IMREAD_COLOR)
+
+        if imgL is None or imgR is None:
+            print(f"Error leyendo: {os.path.basename(left_imgs[i])} o {os.path.basename(right_imgs[i])}")
+            continue
+
+        # Convertir BGR → RGB para visualización correcta en matplotlib
+        imgL_rgb = cv2.cvtColor(imgL, cv2.COLOR_BGR2RGB)
+        imgR_rgb = cv2.cvtColor(imgR, cv2.COLOR_BGR2RGB)
+
+        # Concatenar horizontalmente ambas vistas
+        vis = np.hstack((imgL_rgb, imgR_rgb))
+
+        # Dibujar líneas epipolares horizontales
+        vis_lines = vis.copy()
+        for y in range(0, vis_lines.shape[0], step):
+            cv2.line(vis_lines, (0, y), (vis_lines.shape[1], y), (0, 255, 0), 1)
+
+        # Mostrar resultado
+        plt.figure(figsize=(12, 5))
+        plt.imshow(vis_lines)
+        plt.title(
+            f"Par {i+1} — {os.path.basename(left_imgs[i])} / {os.path.basename(right_imgs[i])}",
+            fontsize=12, weight="bold"
+        )
+        plt.axis("off")
+        plt.show()
+
 
 def cargar_stereo_maps(ruta_maps_pkl):
     """
@@ -341,7 +402,6 @@ def cargar_stereo_maps(ruta_maps_pkl):
     # abrir y deserializar pickle de mapas
     with open(ruta_maps_pkl, "rb") as f:
         return pickle.load(f)  # devolver estructura cargada
-
 
 
 def emparejar_pares(carpeta_capturas):
@@ -394,7 +454,6 @@ def emparejar_pares(carpeta_capturas):
     return pares
 
 
-
 def interseccion_rois(roi1, roi2):
     """
     Calcula la intersección entre dos regiones de interés (ROI) y devuelve la ROI común.
@@ -415,7 +474,6 @@ def interseccion_rois(roi1, roi2):
     if not (xI < xA and yI < yA):
         raise ValueError("Las ROIs no se intersectan; revisar calibración.")  # reportar ausencia de solapamiento
     return xI, yI, (xA - xI), (yA - yI)
-
 
 
 def rectificar_y_guardar_pares(
@@ -462,6 +520,103 @@ def rectificar_y_guardar_pares(
 
     return count  # devolver cantidad de pares procesados
 
+def calcular_disparidad_stereodemo(path_imgs, out_dir, metodo="cre"):
+    """
+    Procesa imágenes ya rectificadas para generar mapas de disparidad utilizando distintos métodos estéreo.
+
+    Guarda en disco:
+        - Mapas de disparidad crudos (.npy)
+        - Mapas normalizados en escala de grises (.png)
+        - Mapas colorizados (.png)
+
+    Args:
+        path_imgs (str): Ruta al directorio que contiene las imágenes rectificadas 
+            (archivos con nombres tipo 'rect_left_*.jpg' y 'rect_right_*.jpg').
+        out_dir (str): Carpeta base donde se guardarán los resultados.
+        metodo (str): Método de correspondencia estéreo a emplear.
+            Valores válidos:
+                - "cre": usa CREStereo (modelo profundo)
+                - "bm":  usa StereoBM (bloque clásico)
+                - "sgbm": usa StereoSGBM (semi-global)
+            Por defecto: "cre".
+
+    Devuelve:
+        None: Muestra mensajes de progreso y guarda los resultados en disco.
+    """
+    # Ruta base del modelo CREStereo
+    models_path = Path.home() / ".cache" / "stereodemo" / "models"
+
+    # Inicializar configuración y seleccionar método
+    config = Config(models_path=models_path)
+    if metodo == "cre":
+        method = CREStereo(config)
+    elif metodo == "bm":
+        method = StereoBM(config)
+    elif metodo == "sgbm":
+        method = StereoSGBM(config)
+    else:
+        raise ValueError(f"Método no reconocido: {metodo}. Usar 'cre', 'bm' o 'sgbm'.")
+
+    # Crear carpeta de salida específica para el método
+    out_dir = os.path.join(out_dir, f"disparidad_{metodo}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Buscar imágenes rectificadas
+    left_imgs  = sorted(glob.glob(os.path.join(path_imgs, "rect_left_*.jpg")))
+    right_imgs = sorted(glob.glob(os.path.join(path_imgs, "rect_right_*.jpg")))
+
+    if len(left_imgs) == 0 or len(left_imgs) != len(right_imgs):
+        print("No se encontraron pares válidos de imágenes rectificadas.")
+        return
+
+    print(f"Imágenes encontradas: {len(left_imgs)} pares")
+    print(f"Método seleccionado: {metodo.upper()}")
+
+    # Iterar sobre los pares
+    for i, (left_path, right_path) in enumerate(zip(left_imgs, right_imgs), 1):
+
+        # Cargar imágenes
+        imgL = cv2.imread(left_path, cv2.IMREAD_COLOR)
+        imgR = cv2.imread(right_path, cv2.IMREAD_COLOR)
+        if imgL is None or imgR is None:
+            print(f"Error leyendo imágenes: {left_path} o {right_path}")
+            continue
+
+        # Construir InputPair (las imágenes ya están rectificadas, sin calibración adicional)
+        pair = InputPair(
+            left_image=imgL,
+            right_image=imgR,
+            calibration=None,
+            status=os.path.basename(left_path)
+        )
+
+        # Calcular disparidad
+        disparity = method.compute_disparity(pair)
+        d = disparity.disparity_pixels.astype(np.float32)
+
+        # Generar nombre base
+        base = os.path.basename(left_path).replace("rect_left_", "").replace(".jpg", "")
+
+        # Guardar disparidad cruda
+        np.save(os.path.join(out_dir, f"disp_raw_{base}.npy"), d)
+
+        # Normalizar disparidad a [0, 255] para visualización
+        d_min, d_max = np.nanmin(d), np.nanmax(d)
+        if np.isfinite(d_min) and np.isfinite(d_max) and d_max > d_min:
+            dvis = 255 * (d - d_min) / (d_max - d_min)
+        else:
+            dvis = np.zeros_like(d)
+        dvis = np.clip(dvis, 0, 255).astype(np.uint8)
+
+        # Aplicar colorización (colormap JET)
+        dvis_color = cv2.applyColorMap(dvis, cv2.COLORMAP_JET)
+
+        # Guardar resultados visuales
+        cv2.imwrite(os.path.join(out_dir, f"disp_gray_{base}.png"), dvis)
+        cv2.imwrite(os.path.join(out_dir, f"disp_color_{base}.png"), dvis_color)
+
+    cv2.destroyAllWindows()
+    print(f"Resultados guardados en: {out_dir}")
 
 # ----------------------- Carga y utilidades -----------------------
 
@@ -568,11 +723,248 @@ def detect_checkerboard(img_gray, pattern=(10,7), square_size_m=0.0242):
     objp = generar_objpoints_grid(pattern[0], pattern[1], square_size_m)  # crear objpoints
     return True, corners, objp  # devolver resultado exitoso
 
-# Ejemplo de firma para Charuco (placeholder):
-# def detect_charuco(img_gray, board, charuco_dict, cameraMatrix, distCoeffs):
-#     # detectar, interpolar y alinear objp/corners
-#     # devolver: (ok, corners_2d (N,1,2), objp_3d (N,3))
-#     # return ok, corners2d, objp3d
+
+def detect_charuco_markers(image, board, detector_params=None):
+    """
+    Detecta los marcadores ArUco presentes en un tablero ChArUco dentro de una imagen.
+
+    Args:
+        image (np.ndarray): Imagen de entrada en formato BGR o en escala de grises.
+        board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado para la detección.
+        detector_params (cv2.aruco.DetectorParameters | None): Parámetros opcionales del detector.
+            Si no se especifican, se crean con valores más permisivos.
+
+    Devuelve:
+        dict | None: Diccionario con las claves:
+            - 'corners' (list[np.ndarray]): Lista de esquinas detectadas para cada marcador.
+            - 'ids' (np.ndarray): Arreglo de IDs asociados a los marcadores detectados.
+            - 'rejected' (list[np.ndarray]): Marcadores rechazados durante la detección.
+        Si no se detectan marcadores válidos, retorna None.
+    """
+    # Convertir a escala de grises si es necesario
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+
+    # Inicializar parámetros del detector si no se proveen
+    if detector_params is None:
+        detector_params = cv2.aruco.DetectorParameters()
+        # configurar parámetros más permisivos para robustecer detección
+        detector_params.adaptiveThreshWinSizeMin = 3
+        detector_params.adaptiveThreshWinSizeMax = 23
+        detector_params.adaptiveThreshWinSizeStep = 10
+        detector_params.minMarkerPerimeterRate = 0.03
+        detector_params.maxMarkerPerimeterRate = 4.0
+
+    # Crear detector ArUco asociado al diccionario del tablero
+    detector = cv2.aruco.ArucoDetector(board.getDictionary(), detector_params)
+
+    # Detectar marcadores en la imagen
+    corners, ids, rejected = detector.detectMarkers(gray)
+
+    # Validar detección
+    if ids is None or len(ids) == 0:
+        return None
+
+    # Ordenar por ID ascendente
+    ids = ids.flatten()
+    order = np.argsort(ids)
+    ids = ids[order]
+    corners = [corners[i] for i in order]
+
+    # Empaquetar resultados en diccionario
+    result = {
+        "corners": corners,
+        "ids": ids,
+        "rejected": rejected
+    }
+
+    return result
+
+
+# ----------------------- Estimación de pose mediante homografía -----------------------
+
+def estimate_camera_pose_with_homography(image, board, detection, calibration, undistort=False):
+    """
+    Estima la pose de la cámara con respecto a un tablero ChArUco utilizando una homografía
+    inicial seguida de una optimización por PnP con el método IPPE (ideal para planos).
+
+    La función utiliza las correspondencias 2D–3D obtenidas de los marcadores detectados
+    para estimar primero una homografía entre el plano del tablero y la imagen, y luego
+    refina la pose de la cámara resolviendo PnP con las esquinas del tablero.
+
+    Args:
+        image (np.ndarray): Imagen de entrada (BGR o en escala de grises) donde se detectó el tablero.
+        board (cv2.aruco.CharucoBoard): Tablero ChArUco con la geometría conocida del patrón.
+        detection (dict): Diccionario devuelto por `detect_charuco_markers` con claves:
+            - 'corners': lista de esquinas detectadas.
+            - 'ids': arreglo de IDs de marcadores detectados.
+        calibration (tuple[np.ndarray, np.ndarray]): Tupla (K, dist) con la matriz intrínseca y
+            coeficientes de distorsión de la cámara.
+        undistort (bool): Si es True, se corrigen los puntos antes y después de estimar la homografía.
+            Por defecto, False.
+
+    Devuelve:
+        tuple[bool, np.ndarray, np.ndarray] | None:
+            (success, rvec, tvec) si la estimación fue exitosa, o None en caso de fallo.
+    """
+    # Extraer datos de entrada
+    corners = detection["corners"]
+    ids = detection["ids"]
+    K, dist = calibration
+
+    # Validar detección mínima
+    if len(ids) < 4:
+        return None
+
+    # Construir correspondencias 2D (imagen) ↔ 2D (plano del tablero)
+    image_points = []
+    board_points = []
+    board_ids = board.getIds()
+    points3d = board.getObjPoints()
+
+    for corner, id in zip(corners, ids):
+        id = int(id)
+        if id not in board_ids:
+            continue
+        point3d = points3d[id]           # (4, 3)
+        image_points.extend(corner[0])   # (4, 2)
+        board_points.extend(point3d)     # (4, 3)
+
+    image_points = np.array(image_points, dtype=np.float32)
+    board_points = np.array(board_points, dtype=np.float32)
+
+    # Validar cantidad de correspondencias suficientes
+    if len(image_points) < 4:
+        return None
+
+    # Corregir distorsión si se solicita
+    if undistort:
+        use_image_points = cv2.undistortPoints(
+            image_points.reshape(-1, 1, 2), K, dist, P=K
+        ).reshape(-1, 2)
+    else:
+        use_image_points = image_points
+
+    # Estimar homografía (2D→2D) entre plano del tablero y la imagen
+    H, inliers = cv2.findHomography(
+        board_points[:, :2],
+        use_image_points,
+        method=cv2.LMEDS
+    )
+    if H is None:
+        return None
+
+    # Obtener todas las esquinas del tablero ChArUco en el plano del patrón
+    charuco_obj_points = board.getChessboardCorners()  # (N, 3)
+    charuco_board_points = np.array(
+        [p[:2] for p in charuco_obj_points],
+        dtype=np.float32
+    ).reshape(-1, 1, 2)
+
+    # Proyectar puntos 2D del tablero a la imagen mediante la homografía
+    projected_charuco_corners = cv2.perspectiveTransform(charuco_board_points, H)
+    projected_charuco_corners = projected_charuco_corners.reshape(-1, 2)
+    obj_pts = np.array(charuco_obj_points, dtype=np.float32)
+
+    # Aplicar corrección de distorsión a los puntos proyectados si corresponde
+    if undistort:
+        use_image_points = cv2.undistortPoints(
+            projected_charuco_corners.reshape(-1, 1, 2), K, dist, P=K
+        ).reshape(-1, 2)
+    else:
+        use_image_points = projected_charuco_corners
+
+    # Resolver la pose mediante PnP con el método IPPE (óptimo para planos)
+    success, rvec, tvec = cv2.solvePnP(
+        obj_pts,
+        use_image_points,
+        K,
+        dist,
+        flags=cv2.SOLVEPNP_IPPE
+    )
+    if not success:
+        return None
+
+    return success, rvec, tvec
+
+# ----------------------- Estimación de pose de tablero ChArUco -----------------------
+
+def detect_charuco_pose(image, camera_matrix, dist_coeffs, board, verbose=False):
+    """
+    Detecta un tablero ChArUco en una imagen y estima la pose de la cámara respecto del mismo,
+    utilizando homografía inicial seguida de resolución por PnP (IPPE).
+
+    Esta función combina la detección de marcadores ArUco y la estimación de pose plana del tablero,
+    retornando tanto los vectores de rotación y traslación como las esquinas e IDs detectados.
+
+    Args:
+        image (np.ndarray): Imagen de entrada (BGR o en escala de grises) donde se busca el tablero.
+        camera_matrix (np.ndarray): Matriz intrínseca de la cámara (3x3).
+        dist_coeffs (np.ndarray): Coeficientes de distorsión de la cámara.
+        board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado para la detección y estimación de pose.
+        verbose (bool): Si es True, imprime información detallada del proceso. Por defecto, False.
+
+    Devuelve:
+        tuple[bool, np.ndarray|None, np.ndarray|None, list[np.ndarray]|None, np.ndarray|None]:
+            (success, rvec, tvec, corners, ids), donde:
+                - success (bool): True si se estimó la pose correctamente.
+                - rvec (np.ndarray): Vector de rotación (Rodrigues).
+                - tvec (np.ndarray): Vector de traslación (posición cámara→tablero).
+                - corners (list[np.ndarray]): Lista de esquinas detectadas de los marcadores.
+                - ids (np.ndarray): IDs correspondientes a los marcadores detectados.
+            En caso de fallo, devuelve (False, None, None, None, None).
+    """
+    # detectar marcadores ArUco en el tablero
+    detection = detect_charuco_markers(image, board)
+    if detection is None:
+        if verbose:
+            print("  ❌ No se detectaron marcadores ArUco.")
+        return False, None, None, None, None
+
+    if verbose:
+        print(f"  📍 Marcadores ArUco detectados: {len(detection['ids'])}")
+
+    # estimar la pose usando homografía + PnP
+    result = estimate_camera_pose_with_homography(
+        image,
+        board,
+        detection,
+        (camera_matrix, dist_coeffs),
+        undistort=False
+    )
+
+    if result is None:
+        if verbose:
+            print("  ❌ No se pudo estimar la pose.")
+        return False, None, None, None, None
+
+    success, rvec, tvec = result
+
+    if verbose:
+        print("  ✅ Pose estimada correctamente.")
+        print(f"     Traslación (t): {tvec.flatten()}")
+
+    return success, rvec, tvec, detection["corners"], detection["ids"]
+
+
+# ----------------------- Utilidades de transformación -----------------------
+
+def create_transform_matrix(rvec, tvec):
+    """
+    Crea una matriz de transformación homogénea 4x4 a partir de un vector de rotación y un vector de traslación.
+
+    Args:
+        rvec (np.ndarray): Vector de rotación (Rodrigues) de forma (3, 1) o (1, 3).
+        tvec (np.ndarray): Vector de traslación de forma (3, 1) o (1, 3).
+
+    Devuelve:
+        np.ndarray: Matriz de transformación homogénea 4x4 (pose de cámara en coordenadas del mundo).
+    """
+    R, _ = cv2.Rodrigues(rvec)  # convertir a matriz de rotación 3x3
+    T = np.eye(4, dtype=np.float64)  # inicializar matriz homogénea
+    T[:3, :3] = R
+    T[:3, 3] = tvec.flatten()
+    return T
+
 
 # ----------------------- Nube desde disparidad -----------------------
 
