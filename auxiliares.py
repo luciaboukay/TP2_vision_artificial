@@ -213,6 +213,12 @@ def make_sgbm(
     )
     return stereo
 
+def sgbm_P1P2(block, channels=1):
+    P1 = 8  * channels * (block ** 2)
+    P2 = 32 * channels * (block ** 2)
+    return P1, P2
+
+
 def procesar_imagenes_rectificadas(path_imgs, out_dir, metodo="cre"):
     """
     Procesa imágenes YA RECTIFICADAS con stereodemo.
@@ -288,3 +294,29 @@ def procesar_imagenes_rectificadas(path_imgs, out_dir, metodo="cre"):
 
     cv2.destroyAllWindows()
     print(f"\n🎉 Procesamiento completado. Mapas guardados en: {out_dir}")
+
+def seleccionar_pares(path, n=3,
+                      pattern_left="rect_left_color_*.png",
+                      pattern_right="rect_right_color_*.png",
+                      indices=None):
+    """
+    Devuelve (pares_indices, pares_imgs, lefts, rights).
+    Si 'indices' es None, toma los primeros n pares.
+    """
+    L = sorted(glob.glob(os.path.join(path, pattern_left)))
+    R = sorted(glob.glob(os.path.join(path, pattern_right)))
+    assert len(L) == len(R) and len(L) > 0, f"No hay pares válidos en {path}"
+
+    if indices is None:
+        k = min(n, len(L))
+        pares_indices = list(range(k))
+    else:
+        pares_indices = [i for i in indices if 0 <= i < len(L)]
+        assert pares_indices, "Los índices no son válidos."
+
+    pares_imgs = [(L[i], R[i]) for i in pares_indices]
+    lefts  = [l for l, _ in pares_imgs]
+    rights = [r for _, r in pares_imgs]
+    return pares_indices, pares_imgs, lefts, rights
+
+
