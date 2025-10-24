@@ -10,6 +10,7 @@ from pathlib import Path
 from stereodemo.method_cre_stereo import CREStereo
 from stereodemo.method_opencv_bm import StereoBM, StereoSGBM
 from stereodemo.methods import InputPair, Config
+from typing import Tuple
 
 
 def generar_puntos_objeto(checkerboard, square_size):
@@ -1047,42 +1048,6 @@ def visualizar_deteccion_charuco(image_path, camera_matrix, dist_coeffs, board, 
     plt.show()
 
 
-def visualizar_todas_detecciones_charuco(base_dir, calib_path, charuco_board, square_length, max_images=5):
-    """
-    Visualiza la detección de tableros ChArUco en múltiples imágenes de un directorio.
-
-    Args:
-        base_dir (str): Carpeta base con las imágenes (left_*.jpg).
-        calib_path (str): Ruta al archivo de calibración estéreo (.pkl).
-        charuco_board (cv2.aruco.CharucoBoard): Tablero ChArUco utilizado para la detección.
-        square_length (float): Longitud del cuadrado del tablero (en mm).
-        max_images (int): Número máximo de imágenes a visualizar. Por defecto, 5.
-
-    Devuelve:
-        None: Muestra las imágenes con detección y resultados por consola.
-    """
-    # Cargar calibración
-    with open(calib_path, "rb") as f:
-        calib = pickle.load(f)
-
-    left_K = calib["left_K"]
-    left_dist = calib["left_dist"]
-
-    # Listar imágenes izquierda
-    left_imgs = sorted(glob.glob(os.path.join(base_dir, "left_*.jpg")))
-    if len(left_imgs) == 0:
-        print(f"No se encontraron imágenes en: {base_dir}")
-        return
-
-    print(f"🔍 Visualizando detección de ChArUco en {min(max_images, len(left_imgs))} imágenes...\n")
-
-    for i, img_path in enumerate(left_imgs[:max_images]):
-        print("\n" + "=" * 60)
-        print(f"Imagen {i+1}: {os.path.basename(img_path)}")
-        print("=" * 60)
-        visualizar_deteccion_charuco(img_path, left_K, left_dist, charuco_board, square_length)
-
-
 # ----------------------- Análisis de calidad de detecciones ChArUco -----------------------
 
 def analizar_calidad_detecciones(
@@ -1150,7 +1115,7 @@ def analizar_calidad_detecciones(
             if success:
                 axis_length = square_length / 1000.0 * 2  # dos cuadrados de longitud
                 cv2.drawFrameAxes(img_draw, left_K, left_dist, rvec, tvec, axis_length, thickness=2)
-                label = f"{os.path.basename(img_path)} ({num_markers} mk)"
+                label = f"{os.path.basename(img_path)}"
             else:
                 label = f"{os.path.basename(img_path)} (Fallo)"
 
@@ -1200,6 +1165,163 @@ def analizar_calidad_detecciones(
     return resultados
 
 
+# ----------------------- Reconstruccion 3D charuco -----------------------
+def reconstruccion_3d_charuco(
+    max_distance=0.8,
+    voxel_size=0.002,
+    max_images=None,
+    min_markers=6,
+    filtrar_planos=True,
+    charuco_board=None
+):
+    """
+    Pipeline de reconstrucción 3D con sistema de referencia FIJO (tablero ChArUco).
+
+    Integra detección de pose, reproyección 3D y combinación de nubes, usando funciones internas del módulo.
+
+    Args:
+        max_distance (float): Distancia máxima válida en metros.
+        voxel_size (float): Tamaño de voxel para el muestreo.
+        max_images (int | None): Límite de imágenes a procesar (None = todas).
+        min_markers (int): Mínimo de marcadores ArUco requeridos.
+        filtrar_planos (bool): Si True, elimina planos grandes (fondo/mesa).
+
+    Devuelve:
+        o3d.geometry.PointCloud | None: Nube 3D combinada (en coordenadas del tablero) o None si falla.
+    """
+    # Directorios base
+    base_dir = "tp2_reconstruccion_3d/datasets/stereo_budha_charuco"
+    calib_path = os.path.join(base_dir, "calib")
+    captures_dir = os.path.join(base_dir, "captures")
+    disparity_dir = os.path.join(captures_dir, "disparidad_cre")
+
+    # Cargar calibración y mapas
+    calib = cargar_calibracion(calib_path)
+    maps = cargar_maps(calib_path)
+
+    left_K = calib["left_K"]
+    left_dist = calib["left_dist"]
+    Q = maps["Q"]
+
+    # Listar imágenes disponibles
+    left_imgs = sorted(glob.glob(os.path.join(captures_dir, "left_*.jpg")))
+    if max_images is not None:
+        left_imgs = left_imgs[:max_images]
+
+    if len(left_imgs) == 0:
+        print("No se encontraron imágenes para reconstrucción.")
+        return None
+
+    all_point_clouds = []
+    successful = 0
+
+    print(f"\nIniciando reconstrucción 3D con {len(left_imgs)} imágenes...\n")
+
+    for i, left_path in enumerate(left_imgs, start=1):
+        img = cv2.imread(left_path)
+        if img is None:
+            print(f"[{i}] Error cargando imagen: {left_path}")
+            continue
+
+        # Detección de tablero ChArUco
+        success, rvec, tvec, corners, ids = detect_charuco_pose(
+            img, left_K, left_dist, charuco_board, verbose=False
+        )
+
+        if not success or ids is None or len(ids) < min_markers:
+            print(f"[{i}] Marcadores insuficientes ({len(ids) if ids is not None else 0}/{min_markers})")
+            continue
+
+        # Validar distancia física
+        dist_to_cam = np.linalg.norm(tvec)
+        if dist_to_cam > max_distance * 1.5 or dist_to_cam < 0.1:
+            continue
+
+        # Construir transformaciones
+        T_board_to_cam = create_transform_matrix(rvec, tvec)
+        T_cam_to_board = np.linalg.inv(T_board_to_cam)
+
+        # Cargar disparidad
+        base_name = os.path.basename(left_path).replace("left_", "").replace(".jpg", "")
+        disp_path = os.path.join(disparity_dir, f"disp_raw_{base_name}.npy")
+
+        if not os.path.exists(disp_path):
+            print(f"[{i}] No existe disparidad asociada ({disp_path})")
+            continue
+
+        disparity = np.load(disp_path).astype(np.float32)
+        valid_ratio = np.sum(disparity > 0) / disparity.size
+        if valid_ratio < 0.1:
+            continue
+
+        # Leer color y alinear tamaño
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if img_rgb.shape[:2] != disparity.shape:
+            img_rgb = cv2.resize(img_rgb, (disparity.shape[1], disparity.shape[0]))
+
+        # Reconstruir nube local
+        pcd_local = nube_desde_disparidad(
+            disparity,
+            img_rgb,
+            Q,
+            filtrar_dist=True,
+            max_dist=max_distance,
+            lim_xy=((-0.3, 0.3), (-0.3, 0.3))
+        )
+
+        if len(pcd_local.points) == 0:
+            continue
+
+        # Transformar a coordenadas del tablero
+        pcd_local.transform(T_cam_to_board)
+
+        # Filtrado estadístico y por radio
+        pcd_local = filtrar_nube_global(
+            pcd_local,
+            usar_estadistico=True,
+            nb=30,
+            std=1.5,
+            voxel=voxel_size
+        )
+
+        if len(pcd_local.points) == 0:
+            continue
+
+        all_point_clouds.append(pcd_local)
+        successful += 1
+
+    # Verificar resultados
+    if successful == 0:
+        print("\nNo se generaron nubes válidas.")
+        return None
+
+    # Combinar nubes
+    pcd_combined = fusionar_nubes(all_point_clouds)
+
+    # Filtrado final opcional de planos
+    if filtrar_planos and len(pcd_combined.points) > 1000:
+        plane_model, inliers = pcd_combined.segment_plane(
+            distance_threshold=0.01,
+            ransac_n=3,
+            num_iterations=1000
+        )
+        pcd_combined = pcd_combined.select_by_index(inliers, invert=True)
+
+    # Visualizar resultado
+    ref = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+    o3d.visualization.draw_geometries(
+        [pcd_combined, ref],
+        window_name=f"Reconstrucción 3D ({successful} imágenes)",
+        width=1280, height=720
+    )
+
+    # Guardar PLY
+    out_path = os.path.join(base_dir, f"reconstruccion_alineada_{successful}imgs.ply")
+    guardar_ply(pcd_combined, out_path)
+    print(f"\nReconstrucción completada: {successful} imágenes válidas.")
+    print(f"Guardado: {out_path}")
+
+    return pcd_combined
 
 
 # ----------------------- Utilidades de transformación -----------------------
@@ -1476,3 +1598,96 @@ def altura_sobre_tablero(pcd):
         return None  # devolver vacío si no hay puntos
     zmin, zmax, h = r  # desempaquetar resultados
     return h  # devolver altura
+
+def filtrar_buda_bbox(
+    nube: o3d.geometry.PointCloud,
+    tablero_cols: int = 11,
+    tablero_rows: int = 8,
+    square_size_m: float = 0.0242,
+    bbox_range_z: float = 0.600,  
+    margin: float = 0.080, 
+    auto_centrar: bool = True,
+    verbose: bool = True
+) -> Tuple[o3d.geometry.PointCloud, o3d.geometry.AxisAlignedBoundingBox]:
+    """
+    Filtra la nube de puntos para extraer el Buda mediante una bounding box alineada a ejes.
+
+    Centra la caja en el tablero (por dimensiones conocidas) y opcionalmente auto-centra en XY
+    según el rango actual de la nube. Limita en Z con un rango simétrico alrededor del plano del tablero.
+
+    Args:
+        nube (o3d.geometry.PointCloud): Nube de puntos completa (tablero + Buda + fondo).
+        tablero_cols (int): Número de columnas de esquinas internas del tablero (p. ej., 11).
+        tablero_rows (int): Número de filas de esquinas internas del tablero (p. ej., 8).
+        square_size_m (float): Tamaño del lado del cuadrado del tablero en metros (p. ej., 0.0242).
+        bbox_range_z (float): Rango simétrico en Z (±) desde el plano del tablero en metros (p. ej., 0.600).
+        margin (float): Margen adicional en X e Y alrededor del tablero en metros (p. ej., 0.080).
+        auto_centrar (bool): Indica si centra la bbox en el punto medio de la nube en XY.
+        verbose (bool): Indica si imprime información diagnóstica del filtrado.
+
+    Devuelve:
+        Tuple[o3d.geometry.PointCloud, o3d.geometry.AxisAlignedBoundingBox]:
+            Nube filtrada y bounding box utilizada.
+    """
+    # validar nube no vacía
+    if not nube.has_points():
+        raise ValueError("La nube de puntos está vacía")
+
+    # obtener puntos como ndarray
+    puntos = np.asarray(nube.points)
+
+    # calcular dimensiones del tablero en el mundo
+    width_x = (tablero_cols - 1) * square_size_m
+    height_y = (tablero_rows - 1) * square_size_m
+
+    # imprimir información si corresponde
+    if verbose:
+        print(f"Dimensiones del tablero: {width_x*1000:.1f} x {height_y*1000:.1f} mm")
+        print(f"Rango Z: ±{bbox_range_z*1000:.1f} mm")
+        print(f"Margen XY: {margin*1000:.1f} mm")
+        print(f"\nRango actual de la nube:")
+        print(f"  X: [{puntos[:, 0].min()*1000:.1f}, {puntos[:, 0].max()*1000:.1f}] mm")
+        print(f"  Y: [{puntos[:, 1].min()*1000:.1f}, {puntos[:, 1].max()*1000:.1f}] mm")
+        print(f"  Z: [{puntos[:, 2].min()*1000:.1f}, {puntos[:, 2].max()*1000:.1f}] mm")
+
+    # definir límites de la bbox
+    if auto_centrar:
+        # calcular centro de la nube en XY
+        centro_x = (puntos[:, 0].min() + puntos[:, 0].max()) / 2
+        centro_y = (puntos[:, 1].min() + puntos[:, 1].max()) / 2
+        z_min = puntos[:, 2].min()
+
+        # construir límites centrados en el punto medio de la nube
+        min_bound = np.array([
+            centro_x - width_x/2 - margin,
+            centro_y - height_y/2 - margin,
+            z_min - bbox_range_z
+        ])
+        max_bound = np.array([
+            centro_x + width_x/2 + margin,
+            centro_y + height_y/2 + margin,
+            z_min + bbox_range_z
+        ])
+
+        # informar centro detectado
+        if verbose:
+            print(f"\nCentro detectado: [{centro_x*1000:.1f}, {centro_y*1000:.1f}] mm")
+    else:
+        # usar bbox centrada en el origen (comportamiento original)
+        min_bound = np.array([-margin, -margin, -bbox_range_z])
+        max_bound = np.array([width_x + margin, height_y + margin, bbox_range_z])
+
+    # informar límites de la bbox
+    if verbose:
+        print(f"\nBounding Box:")
+        print(f"  Min: [{min_bound[0]*1000:.1f}, {min_bound[1]*1000:.1f}, {min_bound[2]*1000:.1f}] mm")
+        print(f"  Max: [{max_bound[0]*1000:.1f}, {max_bound[1]*1000:.1f}, {max_bound[2]*1000:.1f}] mm")
+
+    # crear bounding box alineada a ejes
+    bbox = o3d.geometry.AxisAlignedBoundingBox(min_bound, max_bound)
+    bbox.color = (1, 0, 0)  # asignar color rojo
+
+    # recortar nube con la bbox
+    nube_filtrada = nube.crop(bbox)
+
+    return nube_filtrada, bbox
