@@ -1,0 +1,19 @@
+DIMENSIONES DE LA MUÑECA
+==============================
+
+Puntos analizados: 839,683
+
+AABB:
+  Ancho (X): 160.0 mm
+  Profundidad (Y): 160.0 mm
+  Altura (Z): 290.7 mm
+  Volumen: 7442.0 cm³
+
+OBB:
+  Dimensión menor: 209.8 mm
+  Dimensión media: 209.8 mm
+  Dimensión mayor: 292.6 mm
+  Volumen: 12877.2 cm³
+
+Diámetro promedio: 106.8 mm
+Circunferencia: 335.6 mm

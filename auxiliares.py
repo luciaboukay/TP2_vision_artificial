@@ -22,7 +22,7 @@ def rectificar_imagenes(path_imgs, path_maps):
     Rectifica todos los pares de imágenes estéreo (left/right) de un directorio usando mapas precomputados
     y recorta al ROI válido común (intersección de validRoi1 y validRoi2).
     """
-    # Crear carpeta de salida si no existe
+
     output_dir = os.path.join(path_imgs, "rectificadas")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -41,7 +41,6 @@ def rectificar_imagenes(path_imgs, path_maps):
         xa, ya = max(x1, x2), max(y1, y2)
         xb, yb = min(x1 + w1, x2 + w2), min(y1 + h1, y2 + h2)
         if xb <= xa or yb <= ya:
-            # en caso extremo, usa el tamaño completo de la imagen del mapa
             return (0, 0, left_map_x.shape[1], left_map_x.shape[0])
         return (xa, ya, xb - xa, yb - ya)
 
@@ -52,12 +51,9 @@ def rectificar_imagenes(path_imgs, path_maps):
     right_imgs = sorted(glob.glob(os.path.join(path_imgs, "right_*.jpg")))
 
     if len(left_imgs) != len(right_imgs):
-        print("⚠️ Cantidad distinta de imágenes left/right")
+        print("Cantidad distinta de imágenes left/right")
         print(f"Left: {len(left_imgs)}, Right: {len(right_imgs)}")
         return
-
-    print(f"🔹 Rectificando {len(left_imgs)} pares de imágenes...")
-    print(f"   ROI común aplicado: (x={roiX}, y={roiY}, w={roiW}, h={roiH})")
 
     for left_path, right_path in zip(left_imgs, right_imgs):
         # Leer imágenes en color
@@ -81,8 +77,6 @@ def rectificar_imagenes(path_imgs, path_maps):
         # Guardar
         cv2.imwrite(outL, rectL)
         cv2.imwrite(outR, rectR)
-
-    print(f"✅ Imágenes rectificadas guardadas en: {output_dir}")
 
 # ___________________________ CÁLCULO DE DISPARIDAD ___________________________
 
@@ -113,27 +107,19 @@ def procesar_dataset_completo(path_rectificadas, output_path):
     Carga todos los pares de imágenes, calcula la disparidad y guarda los
     resultados en subcarpetas 'crudo' y 'visual'.
     """
-    print("🔹 Iniciando el proceso de Stereo Matching para todo el dataset...")
-    
-    # --- MODIFICACIÓN: Crear subcarpetas para los resultados ---
+
     path_crudo = os.path.join(output_path, 'crudo')
     path_visual = os.path.join(output_path, 'visual')
     os.makedirs(path_crudo, exist_ok=True)
     os.makedirs(path_visual, exist_ok=True)
-    # --- Fin de la modificación ---
 
     left_images = sorted(glob.glob(os.path.join(path_rectificadas, 'rect_left_*.jpg')))
     right_images = sorted(glob.glob(os.path.join(path_rectificadas, 'rect_right_*.jpg')))
 
-    if not left_images or len(left_images) != len(right_images):
-        print(f"❌ Error: No se encontraron pares de imágenes consistentes en '{path_rectificadas}'.")
-        return
-
     print(f"Se encontraron {len(left_images)} pares de imágenes.")
 
     for i, (left_path, right_path) in enumerate(zip(left_images, right_images)):
-        print(f"  Procesando par {i+1}/{len(left_images)}...")
-        
+        print(f"Procesando par {i+1}/{len(left_images)}...")
         imgL = cv2.imread(left_path, 0)
         imgR = cv2.imread(right_path, 0)
 
@@ -141,17 +127,14 @@ def procesar_dataset_completo(path_rectificadas, output_path):
 
         file_basename = os.path.basename(left_path).replace('rect_left_', '').replace('.jpg', '')
         
-        # --- MODIFICACIÓN: Guardar en la carpeta 'crudo' ---
         np.save(os.path.join(path_crudo, f'disp_raw_{file_basename}.npy'), disparity_raw)
 
-        # --- MODIFICACIÓN: Guardar en la carpeta 'visual' ---
         disparity_visual = cv2.normalize(disparity_raw, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         disparity_color = cv2.applyColorMap(disparity_visual, cv2.COLORMAP_PLASMA)
         cv2.imwrite(os.path.join(path_visual, f'disp_visual_{file_basename}.jpg'), disparity_color)
 
-    print(f"\n✅ Proceso completado. Mapas de disparidad guardados en:")
-    print(f"   - Datos crudos: {path_crudo}")
-    print(f"   - Imágenes visuales: {path_visual}")
+    print(f"Datos crudos: {path_crudo}")
+    print(f"Imágenes visuales: {path_visual}")
 
 def make_bm(num_disp=16*12, block=15, *,
             preFilterType=cv2.STEREO_BM_PREFILTER_XSOBEL,
@@ -245,19 +228,13 @@ def procesar_imagenes_rectificadas(path_imgs, out_dir, metodo="cre"):
     left_imgs = sorted(glob.glob(os.path.join(path_imgs, "rect_left_*.jpg")))
     right_imgs = sorted(glob.glob(os.path.join(path_imgs, "rect_right_*.jpg")))
 
-    print(f"🔹 Encontradas {len(left_imgs)} imágenes izquierdas")
-    print(f"🔹 Encontradas {len(right_imgs)} imágenes derechas\n")
+    print(f"Encontradas {len(left_imgs)} imágenes izquierdas")
+    print(f"Encontradas {len(right_imgs)} imágenes derechas\n")
 
     for i, (left_path, right_path) in enumerate(zip(left_imgs, right_imgs)):
-        print(f"➡️  Procesando par {i+1}/{len(left_imgs)}: {os.path.basename(left_path)}")
-        
         # Cargar imágenes
         imgL = cv2.imread(left_path)
         imgR = cv2.imread(right_path)
-        
-        if imgL is None or imgR is None:
-            print(f"❌ Error cargando imágenes: {left_path} o {right_path}")
-            continue
         
         # Crear InputPair sin calibración (ya están rectificadas)
         pair = InputPair(
@@ -290,10 +267,7 @@ def procesar_imagenes_rectificadas(path_imgs, out_dir, metodo="cre"):
         cv2.imwrite(os.path.join(out_dir, f"disp_gray_{base}.png"), dvis)
         cv2.imwrite(os.path.join(out_dir, f"disp_color_{base}.png"), dvis_color)
 
-        print(f"   ✅ Guardado: disp_color_{base}.png")
-
     cv2.destroyAllWindows()
-    print(f"\n🎉 Procesamiento completado. Mapas guardados en: {out_dir}")
 
 def seleccionar_pares(path, n=3,
                       pattern_left="rect_left_color_*.png",

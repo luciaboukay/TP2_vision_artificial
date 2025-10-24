@@ -20,6 +20,17 @@ charuco_board = cv2.aruco.CharucoBoard(
 )
 
 def detect_charuco_markers(image, board, detector_params=None):
+    """
+    Detecta marcadores Charuco en una imagen.
+    
+    Args:
+        image: Imagen en color o escala de grises
+        board: Tablero Charuco configurado
+        detector_params: Parámetros del detector ArUco (opcional)
+    
+    Returns:
+        Diccionario con corners, ids y rejected o None si no hay detecciones
+    """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
     if not detector_params:
@@ -44,6 +55,19 @@ def detect_charuco_markers(image, board, detector_params=None):
     return {'corners': corners, 'ids': ids, 'rejected': rejected}
 
 def estimate_camera_pose_with_homography(image, board, detection, calibration, undistort=False):
+    """
+    Estima la pose de la cámara usando homografía y marcadores Charuco.
+    
+    Args:
+        image: Imagen de entrada
+        board: Tablero Charuco
+        detection: Resultado de detect_charuco_markers
+        calibration: Tupla (K, dist) con matriz intrínseca y distorsión
+        undistort: Si aplicar corrección de distorsión
+    
+    Returns:
+        Tupla (success, rvec, tvec) o None si falla
+    """
     corners = detection['corners']
     ids = detection['ids']
     K, dist = calibration
@@ -114,23 +138,32 @@ def estimate_camera_pose_with_homography(image, board, detection, calibration, u
     return success, rvec, tvec
 
 def detect_charuco_pose(image, camera_matrix, dist_coeffs, board, verbose=False):
+    """
+    Detecta la pose del tablero Charuco en una imagen.
+    
+    Args:
+        image: Imagen de entrada
+        camera_matrix: Matriz intrínseca de la cámara
+        dist_coeffs: Coeficientes de distorsión
+        board: Tablero Charuco configurado
+        verbose: Si mostrar información de debug
+    
+    Returns:
+        Tupla (success, rvec, tvec_mm, corners, ids)
+    """
     detection = detect_charuco_markers(image, board)
     
     if detection is None:
-        if verbose:
-            print("  ❌", end="")
         return False, None, None, None, None
     
     if verbose:
-        print(f"  ✅{len(detection['ids'])}m", end="")
+        print(f"  {len(detection['ids'])}m", end="")
     
     result = estimate_camera_pose_with_homography(
         image, board, detection, (camera_matrix, dist_coeffs), undistort=False
     )
     
     if result is None:
-        if verbose:
-            print("❌", end="")
         return False, None, None, None, None
     
     success, rvec, tvec = result
@@ -140,6 +173,16 @@ def detect_charuco_pose(image, camera_matrix, dist_coeffs, board, verbose=False)
 
 
 def create_transform_matrix(rvec, tvec):
+    """
+    Crea una matriz de transformación 4x4 a partir de vector de rotación y traslación.
+    
+    Args:
+        rvec: Vector de rotación
+        tvec: Vector de traslación
+    
+    Returns:
+        Matriz de transformación homogénea 4x4
+    """
     R, _ = cv2.Rodrigues(rvec)
     T = np.eye(4)
     T[0:3, 0:3] = R
@@ -149,7 +192,16 @@ def create_transform_matrix(rvec, tvec):
 
 def filtrar_puntos_3d_mejorado(points_3d, disparity, max_distance_mm=1500.0, min_disparity=10.0):
     """
-    ✅ FILTRADO AGRESIVO DE RUIDO
+    Filtra puntos 3D eliminando ruido y valores no válidos.
+    
+    Args:
+        points_3d: Array de puntos 3D
+        disparity: Mapa de disparidad
+        max_distance_mm: Distancia máxima en mm
+        min_disparity: Disparidad mínima válida
+    
+    Returns:
+        Máscara booleana con puntos válidos
     """
     mask = np.ones(disparity.shape, dtype=bool)
     
@@ -176,12 +228,33 @@ def filtrar_puntos_3d_mejorado(points_3d, disparity, max_distance_mm=1500.0, min
 
 
 def crear_bounding_box_filtro(center, extent):
+    """
+    Crea una bounding box orientada para filtrar puntos.
+    
+    Args:
+        center: Centro de la caja
+        extent: Extensiones de la caja
+    
+    Returns:
+        OrientedBoundingBox de Open3D
+    """
     bbox = o3d.geometry.OrientedBoundingBox(center, np.eye(3), extent)
     bbox.color = [1.0, 0.0, 0.0]
     return bbox
 
 
 def filtrar_por_bounding_box(point_cloud, center, extent):
+    """
+    Filtra una nube de puntos usando una bounding box.
+    
+    Args:
+        point_cloud: Nube de puntos de Open3D
+        center: Centro de la caja de filtrado
+        extent: Extensiones de la caja
+    
+    Returns:
+        Tupla (nube_filtrada, bounding_box)
+    """
     bbox = crear_bounding_box_filtro(center, extent)
     idx = bbox.get_point_indices_within_bounding_box(point_cloud.points)
     idx = np.asarray(idx, dtype=np.int64)
@@ -211,7 +284,16 @@ def filtrar_por_bounding_box(point_cloud, center, extent):
 def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0, 
                               outlier_nb_neighbors=35, outlier_std_ratio=1.2):
     """
-    ✅ TU CÓDIGO ORIGINAL - SOLO QUITANDO CONVERSIÓN A GRISES
+    Realiza la reconstrucción 3D en color de un objeto usando múltiples vistas estéreo.
+    
+    Args:
+        max_distance_mm: Distancia máxima de filtrado en milímetros
+        voxel_size_mm: Tamaño del voxel para downsampling
+        outlier_nb_neighbors: Número de vecinos para filtro de outliers
+        outlier_std_ratio: Ratio de desviación estándar para filtro de outliers
+    
+    Returns:
+        Nube de puntos 3D combinada
     """
     base_dir = "imgs"
     calib_path = os.path.join(base_dir, "calibracion/stereo_calibration.pkl")
@@ -233,16 +315,15 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
     all_point_clouds = []
     successful_reconstructions = 0
     
-    print("🔹 Reconstrucción 3D EN COLOR")
-    print(f"   max={max_distance_mm/1000:.1f}m, voxel={voxel_size_mm}mm")
-    print(f"   outliers: n={outlier_nb_neighbors}, σ={outlier_std_ratio}\n")
+    print("Reconstrucción 3D")
+    print(f"Parámetros: distancia máxima={max_distance_mm/1000:.1f}m, voxel={voxel_size_mm}mm")
+    print(f"Outliers: vecinos={outlier_nb_neighbors}, desviación={outlier_std_ratio}\n")
     
     for i, left_img_path in enumerate(left_imgs_original):
         print(f"[{i+1:2d}/{len(left_imgs_original)}] {os.path.basename(left_img_path)[:12]}", end=" ")
         
         left_img_original = cv2.imread(left_img_path)
         if left_img_original is None:
-            print("❌")
             continue
         
         success, rvec, tvec_mm, corners, ids = detect_charuco_pose(
@@ -264,23 +345,14 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
         base_name = os.path.basename(left_img_path).replace("left_", "").replace(".jpg", "")
         disp_raw_path = os.path.join(disparity_dir, f"disp_raw_{base_name}.npy")
         
-        if not os.path.exists(disp_raw_path):
-            print(" ❌")
-            continue
-        
         disparity = np.load(disp_raw_path)
         points_3d = cv2.reprojectImageTo3D(disparity, Q)
         
         mask = filtrar_puntos_3d_mejorado(points_3d, disparity, max_distance_mm, min_disparity=10.0)
         valid_points = points_3d[mask]
         
-        if len(valid_points) < 1000:
-            print(f" ❌")
-            continue
-        
-        # ✅ ÚNICA DIFERENCIA: NO CONVERTIR A GRISES
         img_left_color = cv2.imread(left_img_path)
-        img_left_color = cv2.cvtColor(img_left_color, cv2.COLOR_BGR2RGB)  # ← COLOR, no grises
+        img_left_color = cv2.cvtColor(img_left_color, cv2.COLOR_BGR2RGB) 
 
         if img_left_color.shape[:2] != disparity.shape:
             img_left_color = cv2.resize(img_left_color, 
@@ -292,7 +364,7 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
         
         point_cloud = o3d.geometry.PointCloud()
         point_cloud.points = o3d.utility.Vector3dVector(valid_points)
-        point_cloud.colors = o3d.utility.Vector3dVector(valid_colors)  # ← COLOR
+        point_cloud.colors = o3d.utility.Vector3dVector(valid_colors)  
         
         points_camera = np.array(point_cloud.points)
         points_camera_homogeneous = np.column_stack([points_camera, np.ones(len(points_camera))])
@@ -313,13 +385,9 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
         all_point_clouds.append(point_cloud)
         successful_reconstructions += 1
         
-        print(f" → {len(point_cloud.points):,}pts")
+        print(f" -> {len(point_cloud.points):,} puntos")
     
-    if len(all_point_clouds) == 0:
-        print("\n❌ Sin puntos")
-        return None
-    
-    print(f"\n🔗 Combinando {len(all_point_clouds)} nubes...")
+    print(f"\nCombinando {len(all_point_clouds)} nubes de puntos")
     point_cloud_combined = o3d.geometry.PointCloud()
 
     all_points = []
@@ -340,28 +408,24 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
     point_cloud_combined.points = o3d.utility.Vector3dVector(combined_points)
     point_cloud_combined.colors = o3d.utility.Vector3dVector(combined_colors)
 
-    print(f"   Total: {len(combined_points):,} pts")
+    print(f"Total: {len(combined_points):,} puntos")
     
-    print(f"🧹 Limpieza global 1...")
+    print("Aplicando filtros de limpieza")
     cl, ind = point_cloud_combined.remove_statistical_outlier(nb_neighbors=40, std_ratio=1.5)
     point_cloud_combined = point_cloud_combined.select_by_index(ind)
-    print(f"   Después: {len(point_cloud_combined.points):,} pts")
+    print(f"Después del primer filtro: {len(point_cloud_combined.points):,} puntos")
     
-    print(f"🧹 Limpieza global 2 (agresiva)...")
     cl, ind = point_cloud_combined.remove_statistical_outlier(nb_neighbors=50, std_ratio=1.0)
     point_cloud_combined = point_cloud_combined.select_by_index(ind)
-    print(f"   Final: {len(point_cloud_combined.points):,} pts")
+    print(f"Resultado final: {len(point_cloud_combined.points):,} puntos")
     
-    print(f"\n🎉 Éxito: {successful_reconstructions}/{len(left_imgs_original)}\n")
-    
-    # ✅ NO convertir a grises
-    # point_cloud_gray = convertir_a_escala_grises(point_cloud_combined)  # ← COMENTADO
+    print(f"\nReconstrucciones exitosas: {successful_reconstructions}/{len(left_imgs_original)}\n")
     
     coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=100.0, origin=[0, 0, 0])
 
     o3d.visualization.draw_geometries(
-        [point_cloud_combined, coordinate_frame],  # ← EN COLOR
-        window_name="Reconstrucción 3D EN COLOR",
+        [point_cloud_combined, coordinate_frame],
+        window_name="Reconstrucción 3D en color",
         width=1280,
         height=720,
         point_show_normal=False
@@ -370,6 +434,6 @@ def reconstruccion_3d_muneca(max_distance_mm=1400.0, voxel_size_mm=1.0,
     output_path = os.path.join(base_dir, "objeto/reconstruccion_3d/reconstruccion_muneca_color.ply")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     o3d.io.write_point_cloud(output_path, point_cloud_combined, write_ascii=False)
-    print(f"💾 Guardado\n")
-    
+    print("Archivo guardado")
+
     return point_cloud_combined
